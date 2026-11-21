@@ -1,0 +1,23 @@
+placa_default:
+  ancho_mm: 600.0
+  alto_mm: 400.0
+  margen_seguridad_mm: 22.0
+  origen: "inferior_izquierda"
+
+herramienta:
+  nombre: "PCD_70deg_0.4mm"
+  angulo_grados: 70.0
+  punta_mm: 0.4
+  profundidad_z_mm: 0.5
+  ancho_corte_superficie_mm: 1.10
+
+dxf:
+  version: "R2000"
+  tolerancia_aplanado_mm: 0.002
+  tolerancia_arcos_mm: 0.01
+
+capas:
+  contorno: "01_CONTORNO_PLACA"
+  texto: "02_TEXTO_GRABADO_Z05"
+  simbolos: "03_SIMBOLOS_GRABADO_Z05"
+  ubicacion: "04_UBICACION_GRABADO_Z05"

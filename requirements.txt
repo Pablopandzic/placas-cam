@@ -1,0 +1,7 @@
+﻿fastapi
+uvicorn
+ezdxf
+shapely
+fonttools
+google-genai
+python-multipart
