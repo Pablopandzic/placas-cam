@@ -3,5 +3,6 @@ uvicorn
 ezdxf
 shapely
 fonttools
+uharfbuzz
 google-genai
 python-multipart
