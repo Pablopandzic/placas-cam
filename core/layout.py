@@ -91,6 +91,10 @@ def _fit_line(font_path: str, text: str, cap_h: float, max_w: float):
     w_orig = g.bounds[2] - g.bounds[0]
     if w_orig <= max_w:
         return g
+    # Si el texto contiene puntos (fechas o ubicacion), escalar como bloque continuo para conservar puntos uniformes
+    if "." in text:
+        factor = max_w / max(1e-6, w_orig)
+        return scale(g, xfact=factor, yfact=factor, origin=(0, 0))
 
     chars = list(text)
     if len(chars) > 1:
@@ -141,6 +145,12 @@ def _fit_line(font_path: str, text: str, cap_h: float, max_w: float):
     factor = max_w / max(1e-6, w_orig)
     return scale(g, xfact=factor, yfact=factor, origin=(0, 0))
 
+def _ref_h_no_tilde(font_path: str, cap_h: float) -> float:
+    g_ref = text_to_geom(font_path, "H", cap_height_mm=cap_h).buffer(0)
+    if g_ref.is_empty:
+        return cap_h
+    return max(1e-6, g_ref.bounds[3] - g_ref.bounds[1])
+
 def _place_block_top_down(font_path: str, text: str, cap_h: float, max_w: float, center_x: float, top_y: float, line_gap: float = 8.0):
     raw_lines = [l.strip() for l in (text or "").splitlines() if l.strip()]
     if not raw_lines:
@@ -148,12 +158,14 @@ def _place_block_top_down(font_path: str, text: str, cap_h: float, max_w: float,
     geoms = []
     cur_top = top_y
     last_bottom = top_y
+    h_ref = _ref_h_no_tilde(font_path, cap_h)
     for line in raw_lines:
         g = _fit_line(font_path, line, cap_h, max_w)
         if g.is_empty:
             continue
         g = _center_x(g, center_x)
-        h_l = g.bounds[3] - g.bounds[1]
+        # Usar alto de referencia sin tilde para que acentos (A, E, I, O, U) no corran el bloque hacia abajo
+        h_l = h_ref if re.search(r"[??????]", line) else (g.bounds[3] - g.bounds[1])
         g = translate(g, yoff=(cur_top - h_l) - g.bounds[1])
         geoms.append(g)
         last_bottom = g.bounds[1]
