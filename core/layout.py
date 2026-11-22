@@ -28,6 +28,18 @@ def _norm_fecha(f: str) -> str:
     s = re.sub(r"[/\-\s]+", ".", (f or "").strip())
     return re.sub(r"\.+", ".", s).strip(".")
 
+def _cruz_diagrama_memorial(alto_mm=130.0, ancho_mm=90.0, pared_mm=3.0, ref_int=24.0):
+    brazo_ext = ref_int + (2.0 * pared_mm)
+    y_cruz = alto_mm * 0.64
+    outer = unary_union([
+        box(-brazo_ext / 2.0, 0.0, brazo_ext / 2.0, alto_mm),
+        box(-ancho_mm / 2.0, y_cruz - brazo_ext / 2.0, ancho_mm / 2.0, y_cruz + brazo_ext / 2.0)
+    ]).buffer(0)
+    inner = outer.buffer(-pared_mm, join_style="mitre")
+    geom = outer.difference(inner) if (inner is not None and not inner.is_empty) else outer
+    minx, miny, _, _ = geom.bounds
+    return translate(geom, xoff=-minx, yoff=-miny)
+
 def _cruz_latina(alto_mm=110.0, ancho_mm=80.0, pared_mm=2.3, interior_mm=27.4):
     brazo_ext = interior_mm + (2.0 * pared_mm)
     y_cruz = alto_mm * 0.64
@@ -67,8 +79,8 @@ def _marcador_reserva_dibujo(ancho_mm=24.0, alto_mm=18.0):
     marco_ext = box(0, 0, ancho_mm, alto_mm)
     marco_int = box(grosor, grosor, ancho_mm - grosor, alto_mm - grosor)
     marco = marco_ext.difference(marco_int)
-    diag1 = LineString([(grosor, grosor), (ancho_mm - grosor, alto_mm - grosor)]).buffer(grosor / 2.0)
-    diag2 = LineString([(grosor, alto_mm - grosor), (ancho_mm - grosor, grosor)]).buffer(grosor / 2.0)
+    diag1 = LineString([(grosor, grosor), (ancho_mm - grosor, alto_mm - grosor)]).buffer(grosor * 0.5)
+    diag2 = LineString([(grosor, alto_mm - grosor), (ancho_mm - grosor, grosor)]).buffer(grosor * 0.5)
     return unary_union([marco, diag1, diag2]).buffer(0)
 
 def _fit_text_line(font_path: str, text: str, cap_h: float, max_w: float):
@@ -78,7 +90,6 @@ def _fit_text_line(font_path: str, text: str, cap_h: float, max_w: float):
     w_orig = g.bounds[2] - g.bounds[0]
     if w_orig <= max_w:
         return g
-
     chars = list(text)
     if len(chars) > 1:
         char_geoms = []
@@ -122,8 +133,9 @@ def _fit_text_line(font_path: str, text: str, cap_h: float, max_w: float):
                         x_cur += w_c + min_gap
                 g = unary_union(placed).buffer(0)
                 w_orig = g.bounds[2] - g.bounds[0]
-
-    factor = max_w / w_orig
+                factor = max_w / w_orig
+                return scale(g, xfact=factor, yfact=factor, origin=(0, 0))
+    factor = max_w / max(1e-6, w_orig)
     return scale(g, xfact=factor, yfact=factor, origin=(0, 0))
 
 def _render_multiline_centered(font_path: str, text: str, cap_h: float, max_w: float, center_x: float, line_gap: float = 8.0):
@@ -146,215 +158,145 @@ def _render_multiline_centered(font_path: str, text: str, cap_h: float, max_w: f
 def build_plate_geometries(data: dict):
     cliente = (data.get("cliente") or "memorial").lower().strip()
     es_jardin = (cliente == "jardin_paz")
-
     W = float(data.get("ancho_mm") or (400.0 if es_jardin else 600.0))
     H = float(data.get("alto_mm") or (600.0 if es_jardin else 400.0))
     contorno = box(0, 0, W, H)
 
-    font_main = FONT_SANS if es_jardin else _get_serif_font()
+    font_serif = _get_serif_font()
+    font_sans = FONT_SANS
+    font_main = font_sans if es_jardin else font_serif
 
     encabezado = (data.get("encabezado") or "").strip().upper()
     titulo_familia = (data.get("titulo_familia") or "").strip().upper()
     dedicatoria = (data.get("dedicatoria") or "").strip().upper()
     dedicatoria_antes_fecha = bool(data.get("dedicatoria_antes_fecha", False))
-
     simb_sup = (data.get("simb_sup") or "ninguno").lower()
     simb_izq = (data.get("simb_izq") or "ninguno").lower()
     simb_der = (data.get("simb_der") or "ninguno").lower()
     simb_inf = (data.get("simb_inf") or "ninguno").lower()
-
     sector = (data.get("sector") or "").strip().upper()
     seccion = (data.get("seccion") or "").strip()
     parcela = (data.get("parcela") or "").strip()
-
     personas = [p for p in (data.get("personas") or []) if (p.get("nombre") or "").strip()]
     modo_disposicion = data.get("modo_fechas") or "auto"
     en_linea = (modo_disposicion == "lado") or (modo_disposicion == "auto" and len(personas) >= 5)
 
-    # Escala proporcional respecto a la grilla maestra 400x250 de Memorial
-    s_x_mem = W / 400.0
-    s_y_mem = H / 250.0
-
-    MARGEN_LATERAL = 20.0 if es_jardin else (20.0 * s_x_mem)
-    MARGEN_SUP = 20.0 if es_jardin else (35.0 * s_y_mem)
+    MARGEN_LATERAL = 20.0
+    MARGEN_SUP_DIAGRAMA = 22.0 if not es_jardin else 20.0
     MARGEN_INF_UBIC = 20.0
-    CALLE_SIMBOLO = 16.0 * s_x_mem  # Calle de 16mm en placa de 400mm (X109 -> X125)
 
-    CRUZ_ALTO = 110.0 if es_jardin else (129.0 * s_y_mem)
-    CRUZ_ANCHO = 80.0 if es_jardin else (89.0 * s_x_mem)
-    CRUZ_ESPESOR = 2.3
+    es_diagrama_memorial = (not es_jardin) and abs(W - 600.0) < 1e-3 and abs(H - 400.0) < 1e-3
+    eje_x_texto = 355.0 * (W / 600.0) if not es_jardin else (W / 2.0)
+
+    CRUZ_ALTO = 130.0 if es_diagrama_memorial else 110.0
+    CRUZ_ANCHO = 90.0 if es_diagrama_memorial else 80.0
+    CRUZ_ESPESOR = 3.0 if es_diagrama_memorial else 2.3
     DAVID_W = 90.0
     DAVID_H = 90.0
 
-    H_QEPD = 23.0 if es_jardin else (19.0 * s_y_mem)
-    GAP_QEPD_NOMBRE = 20.0 if es_jardin else (15.0 * s_y_mem)
-    H_NOMBRE = 30.0 if es_jardin else (28.0 * s_y_mem)
-    GAP_NOMBRE_FECHA = 20.0 if es_jardin else (18.0 * s_y_mem)
-    H_FECHA = 20.0 if es_jardin else (17.0 * s_y_mem)
-    H_DEDICATORIA = 20.0 if es_jardin else (16.0 * s_y_mem)
-    GAP_ENTRE_PERSONAS = 22.0 if es_jardin else (16.0 * s_y_mem)
+    H_QEPD = 23.0
+    GAP_QEPD_NOMBRE = 22.0 if es_diagrama_memorial else 20.0
+    H_NOMBRE = 28.0 if es_diagrama_memorial else 30.0
+    GAP_NOMBRE_FECHA = 10.0 if es_diagrama_memorial else 20.0
+    H_FECHA = 20.0
+    GAP_FECHA_FRASE = 15.0 if es_diagrama_memorial else 14.0
+    H_DEDICATORIA = 20.0 if es_jardin else 18.0
+    GAP_ENTRE_PERSONAS = GAP_FECHA_FRASE if es_diagrama_memorial else 22.0
 
     simbolos = []
-    y_cursor = H - MARGEN_SUP
-
-    # 1. Posicionar simbolos superiores/laterales primero para conocer su bounding box en Y
-    y_bottom_simbolo_lat = None  # Limite inferior de simbolos laterales
+    y_cursor = H - MARGEN_SUP_DIAGRAMA
 
     if simb_sup == "cruz":
-        g_cs = _cruz_latina(CRUZ_ALTO, CRUZ_ANCHO, CRUZ_ESPESOR)
-        simbolos.append(translate(g_cs, xoff=(W - CRUZ_ANCHO) / 2.0, yoff=y_cursor - CRUZ_ALTO))
-        y_cursor -= (CRUZ_ALTO + 18.0)
+        g_cs = _cruz_latina(110.0, 80.0, 2.3, 27.4)
+        g_cs = translate(g_cs, xoff=(W - 80.0) / 2.0, yoff=H - 20.0 - 110.0)
+        simbolos.append(g_cs)
+        y_cursor = H - 20.0 - 110.0 - 18.0
     elif simb_sup == "david":
-        g_ds = _estrella_david(DAVID_W, DAVID_H, CRUZ_ESPESOR)
-        simbolos.append(translate(g_ds, xoff=(W - DAVID_W) / 2.0, yoff=y_cursor - DAVID_H))
-        y_cursor -= (DAVID_H + 18.0)
+        g_ds = _estrella_david(DAVID_W, DAVID_H, 2.3)
+        g_ds = translate(g_ds, xoff=(W - DAVID_W) / 2.0, yoff=H - 20.0 - DAVID_H)
+        simbolos.append(g_ds)
+        y_cursor = H - 20.0 - DAVID_H - 18.0
     elif simb_sup == "dibujo":
         g_ms = _marcador_reserva_dibujo(30.0, 26.0)
-        simbolos.append(translate(g_ms, xoff=(W - 30.0) / 2.0, yoff=y_cursor - 26.0))
-        y_cursor -= (26.0 + 18.0)
+        g_ms = translate(g_ms, xoff=(W - 30.0) / 2.0, yoff=H - 20.0 - 26.0)
+        simbolos.append(g_ms)
+        y_cursor = H - 20.0 - 26.0 - 18.0
 
-    # Limites horizontales cuando el renglon esta a la altura de los simbolos laterales
-    x_min_col = MARGEN_LATERAL
-    x_max_col = W - MARGEN_LATERAL
-    y_top_lat = (H - 20.0) if es_jardin else (H - 43.0 * s_y_mem)
-
+    x_min_sym = MARGEN_LATERAL
+    x_max_sym = W - MARGEN_LATERAL
     if simb_izq == "cruz":
-        g_ci = _cruz_latina(CRUZ_ALTO, CRUZ_ANCHO, CRUZ_ESPESOR)
-        y_bot_i = y_top_lat - CRUZ_ALTO
-        simbolos.append(translate(g_ci, xoff=MARGEN_LATERAL, yoff=y_bot_i))
-        x_min_col = MARGEN_LATERAL + CRUZ_ANCHO + CALLE_SIMBOLO
-        y_bottom_simbolo_lat = min(y_bottom_simbolo_lat, y_bot_i) if y_bottom_simbolo_lat is not None else y_bot_i
-    elif simb_izq == "david":
-        g_di = _estrella_david(DAVID_W, DAVID_H, CRUZ_ESPESOR)
-        y_bot_i = y_top_lat - DAVID_H
-        simbolos.append(translate(g_di, xoff=MARGEN_LATERAL, yoff=y_bot_i))
-        x_min_col = MARGEN_LATERAL + DAVID_W + CALLE_SIMBOLO
-        y_bottom_simbolo_lat = min(y_bottom_simbolo_lat, y_bot_i) if y_bottom_simbolo_lat is not None else y_bot_i
+        x_min_sym = max(x_min_sym, MARGEN_LATERAL + CRUZ_ANCHO + 10.0)
     elif simb_izq == "dibujo":
-        w_m, h_m = 24.0 * s_x_mem, 24.0 * s_y_mem
-        g_mi = _marcador_reserva_dibujo(w_m, h_m)
-        y_bot_i = y_top_lat - h_m
-        simbolos.append(translate(g_mi, xoff=MARGEN_LATERAL, yoff=y_bot_i))
-        x_min_col = MARGEN_LATERAL + w_m + CALLE_SIMBOLO
-        y_bottom_simbolo_lat = min(y_bottom_simbolo_lat, y_bot_i) if y_bottom_simbolo_lat is not None else y_bot_i
-
+        x_min_sym = max(x_min_sym, MARGEN_LATERAL + 24.0 + 10.0)
     if simb_der == "cruz":
-        g_cd = _cruz_latina(CRUZ_ALTO, CRUZ_ANCHO, CRUZ_ESPESOR)
-        y_bot_d = y_top_lat - CRUZ_ALTO
-        simbolos.append(translate(g_cd, xoff=W - MARGEN_LATERAL - CRUZ_ANCHO, yoff=y_bot_d))
-        x_max_col = W - MARGEN_LATERAL - CRUZ_ANCHO - CALLE_SIMBOLO
-        y_bottom_simbolo_lat = min(y_bottom_simbolo_lat, y_bot_d) if y_bottom_simbolo_lat is not None else y_bot_d
-    elif simb_der == "david":
-        g_dd = _estrella_david(DAVID_W, DAVID_H, CRUZ_ESPESOR)
-        y_bot_d = y_top_lat - DAVID_H
-        simbolos.append(translate(g_dd, xoff=W - MARGEN_LATERAL - DAVID_W, yoff=y_bot_d))
-        x_max_col = W - MARGEN_LATERAL - DAVID_W - CALLE_SIMBOLO
-        y_bottom_simbolo_lat = min(y_bottom_simbolo_lat, y_bot_d) if y_bottom_simbolo_lat is not None else y_bot_d
+        x_max_sym = min(x_max_sym, W - MARGEN_LATERAL - CRUZ_ANCHO - 10.0)
     elif simb_der == "dibujo":
-        w_m, h_m = 24.0 * s_x_mem, 24.0 * s_y_mem
-        g_md = _marcador_reserva_dibujo(w_m, h_m)
-        y_bot_d = y_top_lat - h_m
-        simbolos.append(translate(g_md, xoff=W - MARGEN_LATERAL - w_m, yoff=y_bot_d))
-        x_max_col = W - MARGEN_LATERAL - w_m - CALLE_SIMBOLO
-        y_bottom_simbolo_lat = min(y_bottom_simbolo_lat, y_bot_d) if y_bottom_simbolo_lat is not None else y_bot_d
+        x_max_sym = min(x_max_sym, W - MARGEN_LATERAL - 24.0 - 10.0)
 
-    # Funcion auxiliar que devuelve (ancho_disponible, eje_centro_x) segun altura Y del renglon:
-    # Si el renglon ya paso por debajo de la cruz (con 4mm de luz), libera todo el ancho X20..X380 (W - 2*margen)
-    ancho_full = W - 2.0 * MARGEN_LATERAL
-    centro_full = W / 2.0
-    ancho_col = max(80.0, x_max_col - x_min_col)
-    centro_col = (x_min_col + x_max_col) / 2.0  # Exacto 252.5mm en placa de 400mm con cruz izq
-
-    def _zona_para_y(y_top_renglon: float):
-        if y_bottom_simbolo_lat is None:
-            return ancho_full, centro_full
-        if y_top_renglon < (y_bottom_simbolo_lat - 4.0):
-            return ancho_full, centro_full
-        return ancho_col, centro_col
+    semi_ancho = max(40.0, min(eje_x_texto - x_min_sym, x_max_sym - eje_x_texto))
+    ancho_util = semi_ancho * 2.0
 
     textos = []
 
-    # 2. Encabezado (Q.E.P.D.)
     if encabezado:
-        w_disp, cx_disp = _zona_para_y(y_cursor)
-        g_enc = _render_multiline_centered(font_main, encabezado, H_QEPD, w_disp, cx_disp, 6.0)
+        g_enc = _render_multiline_centered(font_main, encabezado, H_QEPD, ancho_util, eje_x_texto, 6.0)
         if g_enc and not g_enc.is_empty:
             h_enc = g_enc.bounds[3] - g_enc.bounds[1]
             y_cursor -= h_enc
             textos.append(translate(g_enc, yoff=y_cursor - g_enc.bounds[1]))
             y_cursor -= GAP_QEPD_NOMBRE
 
-    # 3. Titulo familia opcional
     if titulo_familia:
-        w_disp, cx_disp = _zona_para_y(y_cursor)
-        g_fam = _render_multiline_centered(font_main, titulo_familia, 24.0 if es_jardin else (22.0 * s_y_mem), w_disp, cx_disp, 7.0)
+        g_fam = _render_multiline_centered(font_main, titulo_familia, 24.0, ancho_util, eje_x_texto, 8.0)
         if g_fam and not g_fam.is_empty:
             h_fam = g_fam.bounds[3] - g_fam.bounds[1]
             y_cursor -= h_fam
             textos.append(translate(g_fam, yoff=y_cursor - g_fam.bounds[1]))
-            y_cursor -= 15.0
+            y_cursor -= 14.0
 
-    # 4. Personas y Fechas (evaluando renglon por renglon si ya paso por debajo de la cruz)
     y_inicio_personas = y_cursor
     geoms_personas_temp = []
     y_rel = 0.0
+    g_ded = _render_multiline_centered(font_sans if es_diagrama_memorial else font_main, dedicatoria, H_DEDICATORIA, ancho_util, eje_x_texto, 8.0)
 
     for idx, p in enumerate(personas):
         nom = (p.get("nombre") or "").strip().upper()
         fn = _norm_fecha(p.get("fecha_nac", ""))
         ff = _norm_fecha(p.get("fecha_fall", ""))
-        fec_str = f"{fn}   {ff}".strip() if (fn and ff) else (fn or ff)
+        fec_str = f"{fn}  {ff}".strip() if (fn and ff) else (fn or ff)
 
         if en_linea and fec_str:
             nom_flat = " ".join(nom.splitlines())
-            w_disp, cx_disp = _zona_para_y(y_inicio_personas + y_rel)
-            g_l = _fit_text_line(font_main, f"{nom_flat}   {fec_str}", H_NOMBRE, w_disp)
+            g_l = _fit_text_line(font_main, f"{nom_flat}  {fec_str}", H_NOMBRE, ancho_util)
             if not g_l.is_empty:
                 h_l = g_l.bounds[3] - g_l.bounds[1]
                 y_rel -= h_l
-                geoms_personas_temp.append(_align_bottom_y(_center_x(g_l, cx_disp), y_rel))
+                geoms_personas_temp.append(_align_bottom_y(_center_x(g_l, eje_x_texto), y_rel))
         else:
-            raw_nom_lines = [l.strip() for l in nom.splitlines() if l.strip()]
-            h_nom_renglon = H_NOMBRE if len(raw_nom_lines) == 1 else (H_NOMBRE * 0.88)
-            for l_idx, l_txt in enumerate(raw_nom_lines):
-                w_disp, cx_disp = _zona_para_y(y_inicio_personas + y_rel)
-                g_n = _fit_text_line(font_main, l_txt, h_nom_renglon, w_disp)
-                if not g_n.is_empty:
-                    h_n = g_n.bounds[3] - g_n.bounds[1]
-                    y_rel -= h_n
-                    geoms_personas_temp.append(_align_bottom_y(_center_x(g_n, cx_disp), y_rel))
-                    if l_idx < len(raw_nom_lines) - 1:
-                        y_rel -= (10.0 * s_y_mem if not es_jardin else 8.0)
-
-            if dedicatoria_antes_fecha and idx == 0 and dedicatoria:
-                y_rel -= 14.0
-                for d_line in [l.strip() for l in dedicatoria.splitlines() if l.strip()]:
-                    w_disp, cx_disp = _zona_para_y(y_inicio_personas + y_rel)
-                    g_d = _fit_text_line(font_main, d_line, H_DEDICATORIA, w_disp)
-                    if not g_d.is_empty:
-                        h_d = g_d.bounds[3] - g_d.bounds[1]
-                        y_rel -= h_d
-                        geoms_personas_temp.append(_align_bottom_y(_center_x(g_d, cx_disp), y_rel))
-                        y_rel -= 6.0
-
+            g_n = _render_multiline_centered(font_main, nom, H_NOMBRE, ancho_util, eje_x_texto, 8.0)
+            if g_n and not g_n.is_empty:
+                h_n = g_n.bounds[3] - g_n.bounds[1]
+                y_rel -= h_n
+                geoms_personas_temp.append(translate(g_n, yoff=y_rel - g_n.bounds[1]))
+            if dedicatoria_antes_fecha and idx == 0 and g_ded and not g_ded.is_empty:
+                y_rel -= GAP_NOMBRE_FECHA
+                h_d = g_ded.bounds[3] - g_ded.bounds[1]
+                y_rel -= h_d
+                geoms_personas_temp.append(translate(g_ded, yoff=y_rel - g_ded.bounds[1]))
             if fec_str:
                 y_rel -= GAP_NOMBRE_FECHA
-                w_disp, cx_disp = _zona_para_y(y_inicio_personas + y_rel)
-                g_f = _fit_text_line(font_main, fec_str, H_FECHA, w_disp)
+                g_f = _fit_text_line(font_main, fec_str, H_FECHA, ancho_util)
                 if not g_f.is_empty:
                     h_f = g_f.bounds[3] - g_f.bounds[1]
                     y_rel -= h_f
-                    geoms_personas_temp.append(_align_bottom_y(_center_x(g_f, cx_disp), y_rel))
+                    geoms_personas_temp.append(_align_bottom_y(_center_x(g_f, eje_x_texto), y_rel))
 
         if idx < len(personas) - 1:
             y_rel -= GAP_ENTRE_PERSONAS
 
-    # Calcular espacio inferior reservado
-    ded_lines_pie = [l.strip() for l in dedicatoria.splitlines() if l.strip()] if (dedicatoria and not dedicatoria_antes_fecha) else []
-    alto_ded_pie = len(ded_lines_pie) * (H_DEDICATORIA + 8.0) if ded_lines_pie else 0.0
+    alto_ded_pie = (g_ded.bounds[3] - g_ded.bounds[1] + GAP_FECHA_FRASE) if (g_ded and not g_ded.is_empty and not dedicatoria_antes_fecha) else 0.0
     alto_dib_inf = 24.0 if simb_inf == "dibujo" else 0.0
-    y_limite_inf = MARGEN_INF_UBIC + 22.0 + alto_ded_pie + alto_dib_inf
-
+    y_limite_inf = MARGEN_INF_UBIC + 20.0 + alto_ded_pie + alto_dib_inf
     alto_bloque_personas = abs(y_rel)
     espacio_disponible = max(35.0, y_inicio_personas - y_limite_inf)
     factor_v = min(1.0, espacio_disponible / alto_bloque_personas) if alto_bloque_personas > 0 else 1.0
@@ -362,45 +304,60 @@ def build_plate_geometries(data: dict):
     grupo_personas = unary_union(geoms_personas_temp) if geoms_personas_temp else None
     if grupo_personas is not None and not grupo_personas.is_empty:
         if factor_v < 1.0:
-            grupo_personas = scale(grupo_personas, xfact=factor_v, yfact=factor_v, origin=(centro_col if y_bottom_simbolo_lat else centro_full, 0.0))
+            grupo_personas = scale(grupo_personas, xfact=factor_v, yfact=factor_v, origin=(eje_x_texto, 0.0))
         grupo_personas = translate(grupo_personas, yoff=y_inicio_personas)
         textos.append(grupo_personas)
-        y_cursor = grupo_personas.bounds[1] - (16.0 * s_y_mem if not es_jardin else 16.0)
+        y_cursor = grupo_personas.bounds[1] - GAP_FECHA_FRASE
 
-    # 5. Dedicatoria al pie (si quedo debajo de la cruz usa todo el ancho X20..X380)
-    if ded_lines_pie:
-        for idx_d, d_line in enumerate(ded_lines_pie):
-            w_disp, cx_disp = _zona_para_y(y_cursor)
-            g_d = _fit_text_line(font_main, d_line, H_DEDICATORIA, w_disp)
-            if not g_d.is_empty:
-                h_d = g_d.bounds[3] - g_d.bounds[1]
-                y_cursor -= h_d
-                textos.append(_align_bottom_y(_center_x(g_d, cx_disp), y_cursor))
-                if idx_d < len(ded_lines_pie) - 1:
-                    y_cursor -= 7.0
+    if g_ded and not g_ded.is_empty and not dedicatoria_antes_fecha:
+        h_d = g_ded.bounds[3] - g_ded.bounds[1]
+        y_cursor -= h_d
+        textos.append(translate(g_ded, yoff=y_cursor - g_ded.bounds[1]))
         y_cursor -= 8.0
+
+    if simb_izq == "cruz":
+        if es_diagrama_memorial:
+            g_ci = _cruz_diagrama_memorial(CRUZ_ALTO, CRUZ_ANCHO, CRUZ_ESPESOR, 24.0)
+            simbolos.append(translate(g_ci, xoff=MARGEN_LATERAL, yoff=H - 40.0 - CRUZ_ALTO))
+        else:
+            g_ci = _cruz_latina(110.0, 80.0, 2.3, 27.4)
+            simbolos.append(translate(g_ci, xoff=MARGEN_LATERAL, yoff=H - MARGEN_SUP_DIAGRAMA - 110.0))
+    elif simb_izq == "dibujo":
+        g_mi = _marcador_reserva_dibujo(22.0, 22.0)
+        simbolos.append(translate(g_mi, xoff=MARGEN_LATERAL, yoff=H - MARGEN_SUP_DIAGRAMA - 22.0))
+
+    if simb_der == "cruz":
+        if es_diagrama_memorial:
+            g_cd = _cruz_diagrama_memorial(CRUZ_ALTO, CRUZ_ANCHO, CRUZ_ESPESOR, 24.0)
+            simbolos.append(translate(g_cd, xoff=W - MARGEN_LATERAL - CRUZ_ANCHO, yoff=H - 40.0 - CRUZ_ALTO))
+        else:
+            g_cd = _cruz_latina(110.0, 80.0, 2.3, 27.4)
+            simbolos.append(translate(g_cd, xoff=W - MARGEN_LATERAL - 80.0, yoff=H - MARGEN_SUP_DIAGRAMA - 110.0))
+    elif simb_der == "dibujo":
+        g_md = _marcador_reserva_dibujo(22.0, 22.0)
+        simbolos.append(translate(g_md, xoff=W - MARGEN_LATERAL - 22.0, yoff=H - MARGEN_SUP_DIAGRAMA - 22.0))
 
     if simb_inf == "dibujo":
         w_inf, h_inf = 24.0, 16.0
         g_minf = _marcador_reserva_dibujo(w_inf, h_inf)
         y_target_inf = max(MARGEN_INF_UBIC + 18.0, y_cursor - h_inf - 2.0)
-        simbolos.append(translate(g_minf, xoff=(W / 2.0) - w_inf / 2.0, yoff=y_target_inf))
+        simbolos.append(translate(g_minf, xoff=eje_x_texto - w_inf / 2.0, yoff=y_target_inf))
 
-    # 6. Ubicacion abajo izquierda a 20mm del borde izquierdo y 20mm del borde inferior
     ubicacion_geoms = []
     x_cur = MARGEN_LATERAL
     y_ub = MARGEN_INF_UBIC
     if sector:
-        g_sec = text_to_geom(FONT_SANS, sector, cap_height_mm=14.0).buffer(0)
-        g_sec = translate(g_sec, xoff=x_cur - g_sec.bounds[0], yoff=y_ub - g_sec.bounds[1])
-        ubicacion_geoms.append(g_sec)
-        x_cur = g_sec.bounds[2] + 6.0
-
+        g_sec = text_to_geom(font_sans, sector, cap_height_mm=14.0).buffer(0)
+        if not g_sec.is_empty:
+            g_sec = translate(g_sec, xoff=x_cur - g_sec.bounds[0], yoff=y_ub - g_sec.bounds[1])
+            ubicacion_geoms.append(g_sec)
+            x_cur = g_sec.bounds[2] + 6.0
     num_str = f"{seccion}.{parcela}".strip(".")
     if num_str:
-        g_num = text_to_geom(FONT_SANS, num_str, cap_height_mm=11.0).buffer(0)
-        g_num = translate(g_num, xoff=x_cur - g_num.bounds[0], yoff=y_ub - g_num.bounds[1])
-        ubicacion_geoms.append(g_num)
+        g_num = text_to_geom(font_sans, num_str, cap_height_mm=11.0).buffer(0)
+        if not g_num.is_empty:
+            g_num = translate(g_num, xoff=x_cur - g_num.bounds[0], yoff=y_ub - g_num.bounds[1])
+            ubicacion_geoms.append(g_num)
 
     return {
         "01_CONTORNO_PLACA": contorno,
