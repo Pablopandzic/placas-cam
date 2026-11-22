@@ -179,3 +179,4 @@ Devuelve un único JSON plano:
             ultimo_error = str(e)
             continue
     raise HTTPException(status_code=503, detail=f"Modelos ocupados: {ultimo_error}")
+

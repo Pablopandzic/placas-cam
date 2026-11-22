@@ -24,30 +24,44 @@ def _align_bottom_y(geom, target_y):
     _, miny, _, _ = geom.bounds
     return translate(geom, yoff=target_y - miny)
 
-def _set_exact_height(geom, target_h, keep_x_center=None):
-    if geom is None or geom.is_empty or target_h <= 0:
+def _ref_cap_metrics(font_path: str, cap_h: float):
+    """Mide miny y maxy de una letra mayuscula limpia ('H') para alinear linea base y tope exactos sin desvio por colas de Q o tildes."""
+    g_ref = text_to_geom(font_path, "H", cap_height_mm=cap_h).buffer(0)
+    if g_ref.is_empty:
+        return 0.0, cap_h
+    return g_ref.bounds[1], g_ref.bounds[3]
+
+def _set_cap_height(geom, font_path: str, target_cap_h: float):
+    """Escala el texto para que una mayuscula limpia ('H') mida exactamente target_cap_h mm en AutoCAD."""
+    if geom is None or geom.is_empty or target_cap_h <= 0:
         return geom
-    minx, miny, maxx, maxy = geom.bounds
-    cur_h = maxy - miny
-    if cur_h <= 1e-6:
+    r_miny, r_maxy = _ref_cap_metrics(font_path, target_cap_h)
+    cur_cap = r_maxy - r_miny
+    if cur_cap <= 1e-6:
         return geom
-    sy = target_h / cur_h
-    cx_orig = (minx + maxx) / 2.0
-    g = scale(geom, xfact=1.0, yfact=sy, origin=(cx_orig, miny))
-    if keep_x_center is not None:
-        g = _center_x(g, keep_x_center)
-    return g
+    sy = target_cap_h / cur_cap
+    minx, _, maxx, _ = geom.bounds
+    cx = (minx + maxx) / 2.0
+    return scale(geom, xfact=1.0, yfact=sy, origin=(cx, r_miny))
 
 def _norm_fecha(f: str) -> str:
     s = re.sub(r"[/\-\s]+", ".", (f or "").strip())
     return re.sub(r"\.+", ".", s).strip(".")
 
+def _norm_encabezado(enc: str) -> str:
+    t = (enc or "").strip().upper()
+    if re.fullmatch(r"Q\.?\s*E\.?\s*P\.?\s*D\.?", t):
+        return "Q.E.P.D."
+    return t
+
 def _cruz_diagrama_memorial(alto_mm=130.0, ancho_mm=90.0, pared_mm=3.0, ref_int=24.0):
-    brazo_ext = ref_int + (2.0 * pared_mm)
-    y_cruz = alto_mm * 0.64
+    # Brazos exteriores de 30mm (24mm interior + 3mm pared por lado), tramo superior 30mm, brazo 30mm, tramo inferior 70mm
+    brazo_ext = ref_int + (2.0 * pared_mm)  # 30.0 mm
+    y_brazo_inf = alto_mm - 30.0 - brazo_ext  # 70.0 mm
+    y_brazo_sup = alto_mm - 30.0              # 100.0 mm
     outer = unary_union([
         box(-brazo_ext / 2.0, 0.0, brazo_ext / 2.0, alto_mm),
-        box(-ancho_mm / 2.0, y_cruz - brazo_ext / 2.0, ancho_mm / 2.0, y_cruz + brazo_ext / 2.0)
+        box(-ancho_mm / 2.0, y_brazo_inf, ancho_mm / 2.0, y_brazo_sup)
     ]).buffer(0)
     inner = outer.buffer(-pared_mm, join_style="mitre")
     geom = outer.difference(inner) if (inner is not None and not inner.is_empty) else outer
@@ -97,14 +111,15 @@ def _marcador_reserva_dibujo(ancho_mm=24.0, alto_mm=18.0):
     diag2 = LineString([(grosor, alto_mm - grosor), (ancho_mm - grosor, grosor)]).buffer(grosor * 0.5)
     return unary_union([marco, diag1, diag2]).buffer(0)
 
-def _fit_text_line_exact_h(font_path: str, text: str, target_h: float, max_w: float):
+def _fit_text_line_cap(font_path: str, text: str, target_h: float, max_w: float):
     g = text_to_geom(font_path, text, cap_height_mm=target_h).buffer(0)
     if g.is_empty:
         return g
-    g = _set_exact_height(g, target_h)
+    g = _set_cap_height(g, font_path, target_h)
     w_orig = g.bounds[2] - g.bounds[0]
     if w_orig <= max_w:
         return g
+
     chars = list(text)
     if len(chars) > 1:
         char_geoms = []
@@ -117,7 +132,7 @@ def _fit_text_line_exact_h(font_path: str, text: str, target_h: float, max_w: fl
                 if cg.is_empty:
                     valid = False
                     break
-                cg = _set_exact_height(cg, target_h)
+                cg = _set_cap_height(cg, font_path, target_h)
                 char_geoms.append(cg)
         if valid:
             min_gap = 0.45
@@ -149,27 +164,41 @@ def _fit_text_line_exact_h(font_path: str, text: str, target_h: float, max_w: fl
                         x_cur += w_c + min_gap
                 g = unary_union(placed).buffer(0)
                 w_orig = g.bounds[2] - g.bounds[0]
-                factor = max_w / w_orig
-                return scale(g, xfact=factor, yfact=factor, origin=(0, 0))
-    factor = max_w / max(1e-6, w_orig)
-    return scale(g, xfact=factor, yfact=factor, origin=(0, 0))
+                fx = max_w / max(1e-6, w_orig)
+                return scale(g, xfact=fx, yfact=1.0, origin=(0, 0))
 
-def _render_multiline_centered(font_path: str, text: str, target_h: float, max_w: float, center_x: float, line_gap: float = 10.0):
+    fx = max_w / max(1e-6, w_orig)
+    return scale(g, xfact=fx, yfact=1.0, origin=(0, 0))
+
+def _place_line_by_baseline(font_path: str, text: str, target_h: float, max_w: float, center_x: float, top_y: float):
+    """Ubica una linea poniendo el tope de las mayusculas ('H') exactamente en top_y y devuelve (geom, baseline_y)."""
+    g = _fit_text_line_cap(font_path, text, target_h, max_w)
+    if g is None or g.is_empty:
+        return None, top_y
+    r_miny, r_maxy = _ref_cap_metrics(font_path, target_h)
+    # Escalar r_miny/r_maxy al mismo factor que aplico _set_cap_height
+    cur_cap = r_maxy - r_miny
+    sy = (target_h / cur_cap) if cur_cap > 1e-6 else 1.0
+    cap_top = r_miny + (r_maxy - r_miny) * sy
+    cap_base = r_miny
+    dy = top_y - cap_top
+    g_placed = translate(_center_x(g, center_x), yoff=dy)
+    return g_placed, (cap_base + dy)
+
+def _render_multiline_by_baseline(font_path: str, text: str, target_h: float, max_w: float, center_x: float, top_y: float, line_gap: float):
     raw_lines = [l.strip() for l in (text or "").splitlines() if l.strip()]
     if not raw_lines:
-        return None
+        return None, top_y
     geoms = []
-    y_rel = 0.0
+    cur_top = top_y
+    last_base = top_y
     for idx, line in enumerate(raw_lines):
-        g = _fit_text_line_exact_h(font_path, line, target_h, max_w)
-        if g.is_empty:
-            continue
-        h_g = g.bounds[3] - g.bounds[1]
-        y_rel -= h_g
-        geoms.append(_align_bottom_y(_center_x(g, center_x), y_rel))
-        if idx < len(raw_lines) - 1:
-            y_rel -= line_gap
-    return unary_union(geoms).buffer(0) if geoms else None
+        g_l, base_y = _place_line_by_baseline(font_path, line, target_h, max_w, center_x, cur_top)
+        if g_l is not None and not g_l.is_empty:
+            geoms.append(g_l)
+            last_base = base_y
+            cur_top = base_y - line_gap
+    return (unary_union(geoms).buffer(0) if geoms else None), last_base
 
 def build_plate_geometries(data: dict):
     cliente = (data.get("cliente") or "memorial").lower().strip()
@@ -182,7 +211,7 @@ def build_plate_geometries(data: dict):
     font_sans = FONT_SANS
     font_main = font_sans if es_jardin else font_serif
 
-    encabezado = (data.get("encabezado") or "").strip().upper()
+    encabezado = _norm_encabezado(data.get("encabezado") or "")
     titulo_familia = (data.get("titulo_familia") or "").strip().upper()
     dedicatoria = (data.get("dedicatoria") or "").strip().upper()
     dedicatoria_antes_fecha = bool(data.get("dedicatoria_antes_fecha", False))
@@ -210,7 +239,7 @@ def build_plate_geometries(data: dict):
     DAVID_W = 90.0
     DAVID_H = 90.0
 
-    # Alturas y separaciones nominales del PDF Memorial 600x400
+    # Cotas exactas medidas de linea base a tope de mayuscula segun PDF Memorial 600x400
     H_QEPD = 23.0
     GAP_QEPD_NOMBRE = 22.0 if es_diagrama_memorial else 20.0
     H_NOMBRE = 28.0 if es_diagrama_memorial else 30.0
@@ -220,28 +249,27 @@ def build_plate_geometries(data: dict):
     H_DEDICATORIA = 20.0
     GAP_ENTRE_PERSONAS = GAP_FECHA_FRASE if es_diagrama_memorial else 22.0
 
-    # Alturas de ubicacion abajo a la izquierda (en Microsoft Sans Serif)
     H_UBIC_SECTOR = 25.0 if es_diagrama_memorial else 14.0
     H_UBIC_NUM = 20.0 if es_diagrama_memorial else 11.0
 
     simbolos = []
-    y_cursor = H - MARGEN_SUP_DIAGRAMA
+    cur_top_y = H - MARGEN_SUP_DIAGRAMA
 
     if simb_sup == "cruz":
         g_cs = _cruz_latina(110.0, 80.0, 2.3, 27.4)
         g_cs = translate(g_cs, xoff=(W - 80.0) / 2.0, yoff=H - 20.0 - 110.0)
         simbolos.append(g_cs)
-        y_cursor = H - 20.0 - 110.0 - 18.0
+        cur_top_y = H - 20.0 - 110.0 - 18.0
     elif simb_sup == "david":
         g_ds = _estrella_david(DAVID_W, DAVID_H, 2.3)
         g_ds = translate(g_ds, xoff=(W - DAVID_W) / 2.0, yoff=H - 20.0 - DAVID_H)
         simbolos.append(g_ds)
-        y_cursor = H - 20.0 - DAVID_H - 18.0
+        cur_top_y = H - 20.0 - DAVID_H - 18.0
     elif simb_sup == "dibujo":
         g_ms = _marcador_reserva_dibujo(30.0, 26.0)
         g_ms = translate(g_ms, xoff=(W - 30.0) / 2.0, yoff=H - 20.0 - 26.0)
         simbolos.append(g_ms)
-        y_cursor = H - 20.0 - 26.0 - 18.0
+        cur_top_y = H - 20.0 - 26.0 - 18.0
 
     x_min_sym = MARGEN_LATERAL
     x_max_sym = W - MARGEN_LATERAL
@@ -260,25 +288,18 @@ def build_plate_geometries(data: dict):
     textos = []
 
     if encabezado:
-        g_enc = _render_multiline_centered(font_main, encabezado, H_QEPD, ancho_util, eje_x_texto, 10.0)
-        if g_enc and not g_enc.is_empty:
-            h_enc = g_enc.bounds[3] - g_enc.bounds[1]
-            y_cursor -= h_enc
-            textos.append(translate(g_enc, yoff=y_cursor - g_enc.bounds[1]))
-            y_cursor -= GAP_QEPD_NOMBRE
+        g_enc, base_enc = _render_multiline_by_baseline(font_main, encabezado, H_QEPD, ancho_util, eje_x_texto, cur_top_y, 10.0)
+        if g_enc is not None and not g_enc.is_empty:
+            textos.append(g_enc)
+            cur_top_y = base_enc - GAP_QEPD_NOMBRE
 
     if titulo_familia:
-        g_fam = _render_multiline_centered(font_main, titulo_familia, 24.0, ancho_util, eje_x_texto, 10.0)
-        if g_fam and not g_fam.is_empty:
-            h_fam = g_fam.bounds[3] - g_fam.bounds[1]
-            y_cursor -= h_fam
-            textos.append(translate(g_fam, yoff=y_cursor - g_fam.bounds[1]))
-            y_cursor -= 14.0
+        g_fam, base_fam = _render_multiline_by_baseline(font_main, titulo_familia, 24.0, ancho_util, eje_x_texto, cur_top_y, 10.0)
+        if g_fam is not None and not g_fam.is_empty:
+            textos.append(g_fam)
+            cur_top_y = base_fam - 14.0
 
-    y_inicio_personas = y_cursor
-    geoms_personas_temp = []
-    y_rel = 0.0
-    g_ded = _render_multiline_centered(font_sans if es_diagrama_memorial else font_main, dedicatoria, H_DEDICATORIA, ancho_util, eje_x_texto, 10.0)
+    font_ded = font_sans if es_diagrama_memorial else font_main
 
     for idx, p in enumerate(personas):
         nom = (p.get("nombre") or "").strip().upper()
@@ -288,44 +309,37 @@ def build_plate_geometries(data: dict):
 
         if en_linea and fec_str:
             nom_flat = " ".join(nom.splitlines())
-            g_l = _fit_text_line_exact_h(font_main, f"{nom_flat}  {fec_str}", H_NOMBRE, ancho_util)
-            if not g_l.is_empty:
-                h_l = g_l.bounds[3] - g_l.bounds[1]
-                y_rel -= h_l
-                geoms_personas_temp.append(_align_bottom_y(_center_x(g_l, eje_x_texto), y_rel))
+            g_l, base_l = _place_line_by_baseline(font_main, f"{nom_flat}  {fec_str}", H_NOMBRE, ancho_util, eje_x_texto, cur_top_y)
+            if g_l is not None and not g_l.is_empty:
+                textos.append(g_l)
+                cur_top_y = base_l
         else:
-            g_n = _render_multiline_centered(font_main, nom, H_NOMBRE, ancho_util, eje_x_texto, 10.0)
-            if g_n and not g_n.is_empty:
-                h_n = g_n.bounds[3] - g_n.bounds[1]
-                y_rel -= h_n
-                geoms_personas_temp.append(translate(g_n, yoff=y_rel - g_n.bounds[1]))
-            if dedicatoria_antes_fecha and idx == 0 and g_ded and not g_ded.is_empty:
-                y_rel -= GAP_NOMBRE_FECHA
-                h_d = g_ded.bounds[3] - g_ded.bounds[1]
-                y_rel -= h_d
-                geoms_personas_temp.append(translate(g_ded, yoff=y_rel - g_ded.bounds[1]))
+            g_n, base_n = _render_multiline_by_baseline(font_main, nom, H_NOMBRE, ancho_util, eje_x_texto, cur_top_y, 10.0)
+            if g_n is not None and not g_n.is_empty:
+                textos.append(g_n)
+                cur_top_y = base_n
+            if dedicatoria and dedicatoria_antes_fecha and idx == 0:
+                cur_top_y -= GAP_NOMBRE_FECHA
+                g_d, base_d = _render_multiline_by_baseline(font_ded, dedicatoria, H_DEDICATORIA, ancho_util, eje_x_texto, cur_top_y, 10.0)
+                if g_d is not None and not g_d.is_empty:
+                    textos.append(g_d)
+                    cur_top_y = base_d
             if fec_str:
-                y_rel -= GAP_NOMBRE_FECHA
-                g_f = _fit_text_line_exact_h(font_main, fec_str, H_FECHA, ancho_util)
-                if not g_f.is_empty:
-                    h_f = g_f.bounds[3] - g_f.bounds[1]
-                    y_rel -= h_f
-                    geoms_personas_temp.append(_align_bottom_y(_center_x(g_f, eje_x_texto), y_rel))
+                cur_top_y -= GAP_NOMBRE_FECHA
+                g_f, base_f = _place_line_by_baseline(font_main, fec_str, H_FECHA, ancho_util, eje_x_texto, cur_top_y)
+                if g_f is not None and not g_f.is_empty:
+                    textos.append(g_f)
+                    cur_top_y = base_f
 
         if idx < len(personas) - 1:
-            y_rel -= GAP_ENTRE_PERSONAS
+            cur_top_y -= GAP_ENTRE_PERSONAS
 
-    grupo_personas = unary_union(geoms_personas_temp) if geoms_personas_temp else None
-    if grupo_personas is not None and not grupo_personas.is_empty:
-        grupo_personas = translate(grupo_personas, yoff=y_inicio_personas)
-        textos.append(grupo_personas)
-        y_cursor = grupo_personas.bounds[1] - GAP_FECHA_FRASE
-
-    if g_ded and not g_ded.is_empty and not dedicatoria_antes_fecha:
-        h_d = g_ded.bounds[3] - g_ded.bounds[1]
-        y_cursor -= h_d
-        textos.append(translate(g_ded, yoff=y_cursor - g_ded.bounds[1]))
-        y_cursor -= 10.0
+    if dedicatoria and not dedicatoria_antes_fecha:
+        cur_top_y -= GAP_FECHA_FRASE
+        g_d, base_d = _render_multiline_by_baseline(font_ded, dedicatoria, H_DEDICATORIA, ancho_util, eje_x_texto, cur_top_y, 10.0)
+        if g_d is not None and not g_d.is_empty:
+            textos.append(g_d)
+            cur_top_y = base_d
 
     if simb_izq == "cruz":
         if es_diagrama_memorial:
@@ -352,7 +366,7 @@ def build_plate_geometries(data: dict):
     if simb_inf == "dibujo":
         w_inf, h_inf = 24.0, 16.0
         g_minf = _marcador_reserva_dibujo(w_inf, h_inf)
-        y_target_inf = max(MARGEN_INF_UBIC + 18.0, y_cursor - h_inf - 2.0)
+        y_target_inf = max(MARGEN_INF_UBIC + 18.0, cur_top_y - h_inf - 12.0)
         simbolos.append(translate(g_minf, xoff=eje_x_texto - w_inf / 2.0, yoff=y_target_inf))
 
     ubicacion_geoms = []
@@ -361,15 +375,15 @@ def build_plate_geometries(data: dict):
     if sector:
         g_sec = text_to_geom(font_sans, sector, cap_height_mm=H_UBIC_SECTOR).buffer(0)
         if not g_sec.is_empty:
-            g_sec = _set_exact_height(g_sec, H_UBIC_SECTOR)
+            g_sec = _set_cap_height(g_sec, font_sans, H_UBIC_SECTOR)
             g_sec = translate(g_sec, xoff=x_cur - g_sec.bounds[0], yoff=y_ub - g_sec.bounds[1])
             ubicacion_geoms.append(g_sec)
-            x_cur = g_sec.bounds[2] + 6.0
+            x_cur = g_sec.bounds[2] + 8.0
     num_str = f"{seccion}.{parcela}".strip(".")
     if num_str:
         g_num = text_to_geom(font_sans, num_str, cap_height_mm=H_UBIC_NUM).buffer(0)
         if not g_num.is_empty:
-            g_num = _set_exact_height(g_num, H_UBIC_NUM)
+            g_num = _set_cap_height(g_num, font_sans, H_UBIC_NUM)
             g_num = translate(g_num, xoff=x_cur - g_num.bounds[0], yoff=y_ub - g_num.bounds[1])
             ubicacion_geoms.append(g_num)
 
