@@ -25,14 +25,14 @@ def _align_bottom_y(geom, target_y):
     return translate(geom, yoff=target_y - miny)
 
 def _ref_cap_metrics(font_path: str, cap_h: float):
-    """Mide miny y maxy de una letra mayuscula limpia ('H') para alinear linea base y tope exactos sin desvio por colas de Q o tildes."""
+    """Mide miny y maxy de 'H' (sin tilde ni descendente) para fijar altura y linea base reales."""
     g_ref = text_to_geom(font_path, "H", cap_height_mm=cap_h).buffer(0)
     if g_ref.is_empty:
         return 0.0, cap_h
     return g_ref.bounds[1], g_ref.bounds[3]
 
 def _set_cap_height(geom, font_path: str, target_cap_h: float):
-    """Escala el texto para que una mayuscula limpia ('H') mida exactamente target_cap_h mm en AutoCAD."""
+    """Escala el renglon segun la altura real de 'H' sin que la tilde achique el cuerpo de la letra."""
     if geom is None or geom.is_empty or target_cap_h <= 0:
         return geom
     r_miny, r_maxy = _ref_cap_metrics(font_path, target_cap_h)
@@ -54,11 +54,18 @@ def _norm_encabezado(enc: str) -> str:
         return "Q.E.P.D."
     return t
 
+def _format_ubicacion(sector: str, seccion: str, parcela: str) -> str:
+    partes = []
+    for raw in (sector, seccion, parcela):
+        limpio = re.sub(r"\s+", "", (raw or "").strip().strip("."))
+        if limpio:
+            partes.append(limpio)
+    return re.sub(r"\.+", ".", ".".join(partes)).strip(".")
+
 def _cruz_diagrama_memorial(alto_mm=130.0, ancho_mm=90.0, pared_mm=3.0, ref_int=24.0):
-    # Brazos exteriores de 30mm (24mm interior + 3mm pared por lado), tramo superior 30mm, brazo 30mm, tramo inferior 70mm
-    brazo_ext = ref_int + (2.0 * pared_mm)  # 30.0 mm
-    y_brazo_inf = alto_mm - 30.0 - brazo_ext  # 70.0 mm
-    y_brazo_sup = alto_mm - 30.0              # 100.0 mm
+    brazo_ext = ref_int + (2.0 * pared_mm)
+    y_brazo_inf = alto_mm - 30.0 - brazo_ext
+    y_brazo_sup = alto_mm - 30.0
     outer = unary_union([
         box(-brazo_ext / 2.0, 0.0, brazo_ext / 2.0, alto_mm),
         box(-ancho_mm / 2.0, y_brazo_inf, ancho_mm / 2.0, y_brazo_sup)
@@ -171,12 +178,10 @@ def _fit_text_line_cap(font_path: str, text: str, target_h: float, max_w: float)
     return scale(g, xfact=fx, yfact=1.0, origin=(0, 0))
 
 def _place_line_by_baseline(font_path: str, text: str, target_h: float, max_w: float, center_x: float, top_y: float):
-    """Ubica una linea poniendo el tope de las mayusculas ('H') exactamente en top_y y devuelve (geom, baseline_y)."""
     g = _fit_text_line_cap(font_path, text, target_h, max_w)
     if g is None or g.is_empty:
         return None, top_y
     r_miny, r_maxy = _ref_cap_metrics(font_path, target_h)
-    # Escalar r_miny/r_maxy al mismo factor que aplico _set_cap_height
     cur_cap = r_maxy - r_miny
     sy = (target_h / cur_cap) if cur_cap > 1e-6 else 1.0
     cap_top = r_miny + (r_maxy - r_miny) * sy
@@ -239,7 +244,6 @@ def build_plate_geometries(data: dict):
     DAVID_W = 90.0
     DAVID_H = 90.0
 
-    # Cotas exactas medidas de linea base a tope de mayuscula segun PDF Memorial 600x400
     H_QEPD = 23.0
     GAP_QEPD_NOMBRE = 22.0 if es_diagrama_memorial else 20.0
     H_NOMBRE = 28.0 if es_diagrama_memorial else 30.0
@@ -249,8 +253,7 @@ def build_plate_geometries(data: dict):
     H_DEDICATORIA = 20.0
     GAP_ENTRE_PERSONAS = GAP_FECHA_FRASE if es_diagrama_memorial else 22.0
 
-    H_UBIC_SECTOR = 25.0 if es_diagrama_memorial else 14.0
-    H_UBIC_NUM = 20.0 if es_diagrama_memorial else 11.0
+    H_UBIC = 20.0 if es_diagrama_memorial else 14.0
 
     simbolos = []
     cur_top_y = H - MARGEN_SUP_DIAGRAMA
@@ -287,11 +290,14 @@ def build_plate_geometries(data: dict):
 
     textos = []
 
+    # Si no lleva sigla (Q.E.P.D. vacio), conserva el hueco superior para que el nombre quede en su Y habitual alineado a la cruz
     if encabezado:
         g_enc, base_enc = _render_multiline_by_baseline(font_main, encabezado, H_QEPD, ancho_util, eje_x_texto, cur_top_y, 10.0)
         if g_enc is not None and not g_enc.is_empty:
             textos.append(g_enc)
             cur_top_y = base_enc - GAP_QEPD_NOMBRE
+    else:
+        cur_top_y = cur_top_y - H_QEPD - GAP_QEPD_NOMBRE
 
     if titulo_familia:
         g_fam, base_fam = _render_multiline_by_baseline(font_main, titulo_familia, 24.0, ancho_util, eje_x_texto, cur_top_y, 10.0)
@@ -369,23 +375,15 @@ def build_plate_geometries(data: dict):
         y_target_inf = max(MARGEN_INF_UBIC + 18.0, cur_top_y - h_inf - 12.0)
         simbolos.append(translate(g_minf, xoff=eje_x_texto - w_inf / 2.0, yoff=y_target_inf))
 
+    # Ubicacion abajo izquierda (ej. X.10.250 o X2.10.250 en Microsoft Sans Serif)
     ubicacion_geoms = []
-    x_cur = MARGEN_LATERAL
-    y_ub = MARGEN_INF_UBIC
-    if sector:
-        g_sec = text_to_geom(font_sans, sector, cap_height_mm=H_UBIC_SECTOR).buffer(0)
-        if not g_sec.is_empty:
-            g_sec = _set_cap_height(g_sec, font_sans, H_UBIC_SECTOR)
-            g_sec = translate(g_sec, xoff=x_cur - g_sec.bounds[0], yoff=y_ub - g_sec.bounds[1])
-            ubicacion_geoms.append(g_sec)
-            x_cur = g_sec.bounds[2] + 8.0
-    num_str = f"{seccion}.{parcela}".strip(".")
-    if num_str:
-        g_num = text_to_geom(font_sans, num_str, cap_height_mm=H_UBIC_NUM).buffer(0)
-        if not g_num.is_empty:
-            g_num = _set_cap_height(g_num, font_sans, H_UBIC_NUM)
-            g_num = translate(g_num, xoff=x_cur - g_num.bounds[0], yoff=y_ub - g_num.bounds[1])
-            ubicacion_geoms.append(g_num)
+    ubic_str = _format_ubicacion(sector, seccion, parcela)
+    if ubic_str:
+        g_ub = text_to_geom(font_sans, ubic_str, cap_height_mm=H_UBIC).buffer(0)
+        if not g_ub.is_empty:
+            g_ub = _set_cap_height(g_ub, font_sans, H_UBIC)
+            g_ub = translate(g_ub, xoff=MARGEN_LATERAL - g_ub.bounds[0], yoff=MARGEN_INF_UBIC - g_ub.bounds[1])
+            ubicacion_geoms.append(g_ub)
 
     return {
         "01_CONTORNO_PLACA": contorno,
