@@ -202,7 +202,7 @@ def build_plate_geometries(data: dict):
     GAP_QEPD_NOMBRE = 22.0 if es_diagrama_memorial else 20.0
     H_NOMBRE = 28.0 if es_diagrama_memorial else 30.0
     GAP_NOMBRE_FECHA = 10.0 if es_diagrama_memorial else 20.0
-    H_FECHA = 20.0
+    H_FECHA = 20.0 * (20.0 / 18.67)
     GAP_FECHA_FRASE = 15.0 if es_diagrama_memorial else 14.0
     H_DEDICATORIA = 18.0
     GAP_ENTRE_PERSONAS = GAP_FECHA_FRASE if es_diagrama_memorial else 22.0
@@ -276,8 +276,9 @@ def build_plate_geometries(data: dict):
         else:
             g_n, bot_n = _place_block_top_down(font_main, nom, H_NOMBRE, ancho_util, eje_x_texto, cur_top_y, 8.0)
             if g_n is not None and not g_n.is_empty:
+                g_n = translate(g_n, yoff=3.87)
                 textos.append(g_n)
-                cur_top_y = bot_n
+                cur_top_y = bot_n + 3.87
             if dedicatoria and dedicatoria_antes_fecha and idx == 0:
                 cur_top_y -= GAP_NOMBRE_FECHA
                 g_d, bot_d = _place_block_top_down(font_ded, dedicatoria, H_DEDICATORIA, ancho_util, eje_x_texto, cur_top_y, 8.0)
