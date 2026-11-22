@@ -269,7 +269,7 @@ def build_plate_geometries(data: dict):
 
         if en_linea and fec_str:
             nom_flat = " ".join(nom.splitlines())
-            g_l, bot_l = _place_block_top_down(font_main, f"{nom_flat}  {fec_str}", H_NOMBRE, ancho_util, eje_x_texto, cur_top_y, 8.0)
+            g_l, bot_l = _place_block_top_down(font_sans, f"{nom_flat}  {fec_str}", H_NOMBRE, ancho_util, eje_x_texto, cur_top_y, 8.0)
             if g_l is not None and not g_l.is_empty:
                 textos.append(g_l)
                 cur_top_y = bot_l
@@ -287,7 +287,7 @@ def build_plate_geometries(data: dict):
                     cur_top_y = bot_d
             if fec_str:
                 cur_top_y -= GAP_NOMBRE_FECHA
-                g_f, bot_f = _place_block_top_down(font_main, fec_str, H_FECHA, ancho_util, eje_x_texto, cur_top_y, 8.0)
+                g_f, bot_f = _place_block_top_down(font_sans, fec_str, H_FECHA, ancho_util, eje_x_texto, cur_top_y, 8.0)
                 if g_f is not None and not g_f.is_empty:
                     textos.append(g_f)
                     cur_top_y = bot_f
