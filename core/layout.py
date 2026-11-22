@@ -138,7 +138,7 @@ def _fit_text_line(font_path: str, text: str, cap_h: float, max_w: float):
     factor = max_w / max(1e-6, w_orig)
     return scale(g, xfact=factor, yfact=factor, origin=(0, 0))
 
-def _render_multiline_centered(font_path: str, text: str, cap_h: float, max_w: float, center_x: float, line_gap: float = 8.0):
+def _render_multiline_centered(font_path: str, text: str, cap_h: float, max_w: float, center_x: float, line_gap: float = 10.0):
     raw_lines = [l.strip() for l in (text or "").splitlines() if l.strip()]
     if not raw_lines:
         return None
@@ -239,7 +239,7 @@ def build_plate_geometries(data: dict):
     textos = []
 
     if encabezado:
-        g_enc = _render_multiline_centered(font_main, encabezado, H_QEPD, ancho_util, eje_x_texto, 6.0)
+        g_enc = _render_multiline_centered(font_main, encabezado, H_QEPD, ancho_util, eje_x_texto, 10.0)
         if g_enc and not g_enc.is_empty:
             h_enc = g_enc.bounds[3] - g_enc.bounds[1]
             y_cursor -= h_enc
@@ -247,7 +247,7 @@ def build_plate_geometries(data: dict):
             y_cursor -= GAP_QEPD_NOMBRE
 
     if titulo_familia:
-        g_fam = _render_multiline_centered(font_main, titulo_familia, 24.0, ancho_util, eje_x_texto, 8.0)
+        g_fam = _render_multiline_centered(font_main, titulo_familia, 24.0, ancho_util, eje_x_texto, 10.0)
         if g_fam and not g_fam.is_empty:
             h_fam = g_fam.bounds[3] - g_fam.bounds[1]
             y_cursor -= h_fam
@@ -257,7 +257,7 @@ def build_plate_geometries(data: dict):
     y_inicio_personas = y_cursor
     geoms_personas_temp = []
     y_rel = 0.0
-    g_ded = _render_multiline_centered(font_sans if es_diagrama_memorial else font_main, dedicatoria, H_DEDICATORIA, ancho_util, eje_x_texto, 8.0)
+    g_ded = _render_multiline_centered(font_sans if es_diagrama_memorial else font_main, dedicatoria, H_DEDICATORIA, ancho_util, eje_x_texto, 10.0)
 
     for idx, p in enumerate(personas):
         nom = (p.get("nombre") or "").strip().upper()
@@ -273,7 +273,7 @@ def build_plate_geometries(data: dict):
                 y_rel -= h_l
                 geoms_personas_temp.append(_align_bottom_y(_center_x(g_l, eje_x_texto), y_rel))
         else:
-            g_n = _render_multiline_centered(font_main, nom, H_NOMBRE, ancho_util, eje_x_texto, 8.0)
+            g_n = _render_multiline_centered(font_main, nom, H_NOMBRE, ancho_util, eje_x_texto, 10.0)
             if g_n and not g_n.is_empty:
                 h_n = g_n.bounds[3] - g_n.bounds[1]
                 y_rel -= h_n
@@ -303,7 +303,7 @@ def build_plate_geometries(data: dict):
 
     grupo_personas = unary_union(geoms_personas_temp) if geoms_personas_temp else None
     if grupo_personas is not None and not grupo_personas.is_empty:
-        if factor_v < 1.0:
+        if factor_v < 0.999:
             grupo_personas = scale(grupo_personas, xfact=factor_v, yfact=factor_v, origin=(eje_x_texto, 0.0))
         grupo_personas = translate(grupo_personas, yoff=y_inicio_personas)
         textos.append(grupo_personas)
@@ -313,7 +313,7 @@ def build_plate_geometries(data: dict):
         h_d = g_ded.bounds[3] - g_ded.bounds[1]
         y_cursor -= h_d
         textos.append(translate(g_ded, yoff=y_cursor - g_ded.bounds[1]))
-        y_cursor -= 8.0
+        y_cursor -= 10.0
 
     if simb_izq == "cruz":
         if es_diagrama_memorial:
