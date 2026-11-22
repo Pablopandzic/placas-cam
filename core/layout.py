@@ -164,6 +164,26 @@ def _ref_h_no_tilde(font_path: str, cap_h: float) -> float:
         return cap_h
     return max(1e-6, g_ref.bounds[3] - g_ref.bounds[1])
 
+
+def _escala_comun_nombres(personas_list, font_path: str, cap_h: float, max_w: float, en_linea: bool):
+    """Calcula un unico factor de escala horizontal comun para todos los nombres de la placa."""
+    factor_comun = 1.0
+    for p in personas_list:
+        nom = (p.get("nombre") or "").strip().upper()
+        if not nom:
+            continue
+        fn = _norm_fecha(p.get("fecha_nac", ""))
+        ff = _norm_fecha(p.get("fecha_fall", ""))
+        fec_str = f"{fn}      {ff}".strip() if (fn and ff) else (fn or ff)
+        lineas = [" ".join(nom.splitlines()) + (f"  {fec_str}" if (en_linea and fec_str) else "")] if en_linea else [l.strip() for l in nom.splitlines() if l.strip()]
+        for ln in lineas:
+            g_tmp = text_to_geom(font_path, ln, cap_height_mm=cap_h).buffer(0)
+            if not g_tmp.is_empty:
+                w_tmp = g_tmp.bounds[2] - g_tmp.bounds[0]
+                if w_tmp > max_w and w_tmp > 1e-6:
+                    factor_comun = min(factor_comun, max_w / w_tmp)
+    return factor_comun
+
 def _place_block_top_down(font_path: str, text: str, cap_h: float, max_w: float, center_x: float, top_y: float, line_gap: float = 8.0):
     raw_lines = [l.strip() for l in (text or "").splitlines() if l.strip()]
     if not raw_lines:
@@ -286,6 +306,7 @@ def build_plate_geometries(data: dict):
 
     font_ded = font_sans if es_diagrama_memorial else font_main
 
+    factor_nombres = _escala_comun_nombres(personas, font_main, H_NOMBRE, ancho_util, en_linea)
     for idx, p in enumerate(personas):
         nom = (p.get("nombre") or "").strip().upper()
         fn = _norm_fecha(p.get("fecha_nac", ""))
@@ -301,6 +322,12 @@ def build_plate_geometries(data: dict):
         else:
             g_n, bot_n = _place_block_top_down(font_main, nom, H_NOMBRE, ancho_util, eje_x_texto, cur_top_y, 8.0)
             if g_n is not None and not g_n.is_empty:
+                if factor_nombres < 0.999999:
+                    c_x = (g_n.bounds[0] + g_n.bounds[2]) / 2.0
+                    c_y = (g_n.bounds[1] + g_n.bounds[3]) / 2.0
+                    g_n = scale(g_n, xfact=factor_nombres, yfact=factor_nombres, origin=(c_x, c_y))
+                    g_n = _center_x(g_n, eje_x_texto)
+                    bot_n = g_n.bounds[1]
                 g_n = translate(g_n, yoff=3.87)
                 textos.append(g_n)
                 cur_top_y = bot_n + 3.87
