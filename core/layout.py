@@ -314,6 +314,7 @@ def build_plate_geometries(data: dict):
                 cur_top_y -= GAP_NOMBRE_FECHA
                 g_f, bot_f = _place_block_top_down(font_sans, fec_str, H_FECHA, ancho_util, eje_x_texto, cur_top_y, 8.0)
                 if g_f is not None and not g_f.is_empty:
+                    g_f = _center_x(g_f, eje_x_texto)
                     textos.append(g_f)
                     cur_top_y = bot_f
 
