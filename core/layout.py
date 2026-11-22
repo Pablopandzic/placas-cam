@@ -194,6 +194,7 @@ def build_plate_geometries(data: dict):
     DAVID_W = 90.0
     DAVID_H = 90.0
 
+    # Alturas y separaciones exactas de taller (sin compresion vertical forzada)
     H_QEPD = 23.0
     GAP_QEPD_NOMBRE = 22.0 if es_diagrama_memorial else 20.0
     H_NOMBRE = 28.0 if es_diagrama_memorial else 30.0
@@ -294,17 +295,8 @@ def build_plate_geometries(data: dict):
         if idx < len(personas) - 1:
             y_rel -= GAP_ENTRE_PERSONAS
 
-    alto_ded_pie = (g_ded.bounds[3] - g_ded.bounds[1] + GAP_FECHA_FRASE) if (g_ded and not g_ded.is_empty and not dedicatoria_antes_fecha) else 0.0
-    alto_dib_inf = 24.0 if simb_inf == "dibujo" else 0.0
-    y_limite_inf = MARGEN_INF_UBIC + 20.0 + alto_ded_pie + alto_dib_inf
-    alto_bloque_personas = abs(y_rel)
-    espacio_disponible = max(35.0, y_inicio_personas - y_limite_inf)
-    factor_v = min(1.0, espacio_disponible / alto_bloque_personas) if alto_bloque_personas > 0 else 1.0
-
     grupo_personas = unary_union(geoms_personas_temp) if geoms_personas_temp else None
     if grupo_personas is not None and not grupo_personas.is_empty:
-        if factor_v < 0.999:
-            grupo_personas = scale(grupo_personas, xfact=factor_v, yfact=factor_v, origin=(eje_x_texto, 0.0))
         grupo_personas = translate(grupo_personas, yoff=y_inicio_personas)
         textos.append(grupo_personas)
         y_cursor = grupo_personas.bounds[1] - GAP_FECHA_FRASE
