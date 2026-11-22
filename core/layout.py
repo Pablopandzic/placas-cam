@@ -20,7 +20,20 @@ def _center_x(geom, target_x):
 
 def _norm_fecha(f: str) -> str:
     s = re.sub(r"[/\-\s]+", ".", (f or "").strip())
-    return re.sub(r"\.+", ".", s).strip(".")
+    s = re.sub(r"\.+", ".", s).strip(".")
+    if not s:
+        return ""
+    partes = s.split(".")
+    limpias = []
+    for idx, p in enumerate(partes):
+        p_c = p.strip()
+        if not p_c:
+            continue
+        if idx < 2 and p_c.isdigit():
+            p_c = str(int(p_c))
+        limpias.append(p_c)
+    return ".".join(limpias)
+
 
 def _norm_encabezado(enc: str) -> str:
     t = (enc or "").strip().upper()
@@ -277,7 +290,7 @@ def build_plate_geometries(data: dict):
         nom = (p.get("nombre") or "").strip().upper()
         fn = _norm_fecha(p.get("fecha_nac", ""))
         ff = _norm_fecha(p.get("fecha_fall", ""))
-        fec_str = f"{fn}  {ff}".strip() if (fn and ff) else (fn or ff)
+        fec_str = f"{fn}      {ff}".strip() if (fn and ff) else (fn or ff)
 
         if en_linea and fec_str:
             nom_flat = " ".join(nom.splitlines())
