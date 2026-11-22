@@ -24,6 +24,20 @@ def _align_bottom_y(geom, target_y):
     _, miny, _, _ = geom.bounds
     return translate(geom, yoff=target_y - miny)
 
+def _set_exact_height(geom, target_h, keep_x_center=None):
+    if geom is None or geom.is_empty or target_h <= 0:
+        return geom
+    minx, miny, maxx, maxy = geom.bounds
+    cur_h = maxy - miny
+    if cur_h <= 1e-6:
+        return geom
+    sy = target_h / cur_h
+    cx_orig = (minx + maxx) / 2.0
+    g = scale(geom, xfact=1.0, yfact=sy, origin=(cx_orig, miny))
+    if keep_x_center is not None:
+        g = _center_x(g, keep_x_center)
+    return g
+
 def _norm_fecha(f: str) -> str:
     s = re.sub(r"[/\-\s]+", ".", (f or "").strip())
     return re.sub(r"\.+", ".", s).strip(".")
@@ -83,10 +97,11 @@ def _marcador_reserva_dibujo(ancho_mm=24.0, alto_mm=18.0):
     diag2 = LineString([(grosor, alto_mm - grosor), (ancho_mm - grosor, grosor)]).buffer(grosor * 0.5)
     return unary_union([marco, diag1, diag2]).buffer(0)
 
-def _fit_text_line(font_path: str, text: str, cap_h: float, max_w: float):
-    g = text_to_geom(font_path, text, cap_height_mm=cap_h).buffer(0)
+def _fit_text_line_exact_h(font_path: str, text: str, target_h: float, max_w: float):
+    g = text_to_geom(font_path, text, cap_height_mm=target_h).buffer(0)
     if g.is_empty:
         return g
+    g = _set_exact_height(g, target_h)
     w_orig = g.bounds[2] - g.bounds[0]
     if w_orig <= max_w:
         return g
@@ -98,14 +113,15 @@ def _fit_text_line(font_path: str, text: str, cap_h: float, max_w: float):
             if ch == " ":
                 char_geoms.append(None)
             else:
-                cg = text_to_geom(font_path, ch, cap_height_mm=cap_h).buffer(0)
+                cg = text_to_geom(font_path, ch, cap_height_mm=target_h).buffer(0)
                 if cg.is_empty:
                     valid = False
                     break
+                cg = _set_exact_height(cg, target_h)
                 char_geoms.append(cg)
         if valid:
             min_gap = 0.45
-            space_w = cap_h * 0.24
+            space_w = target_h * 0.24
             sum_char_w = sum((cg.bounds[2] - cg.bounds[0]) if cg is not None else space_w for cg in char_geoms)
             n_gaps = len(chars) - 1
             min_total_w = sum_char_w + n_gaps * min_gap
@@ -138,14 +154,14 @@ def _fit_text_line(font_path: str, text: str, cap_h: float, max_w: float):
     factor = max_w / max(1e-6, w_orig)
     return scale(g, xfact=factor, yfact=factor, origin=(0, 0))
 
-def _render_multiline_centered(font_path: str, text: str, cap_h: float, max_w: float, center_x: float, line_gap: float = 10.0):
+def _render_multiline_centered(font_path: str, text: str, target_h: float, max_w: float, center_x: float, line_gap: float = 10.0):
     raw_lines = [l.strip() for l in (text or "").splitlines() if l.strip()]
     if not raw_lines:
         return None
     geoms = []
     y_rel = 0.0
     for idx, line in enumerate(raw_lines):
-        g = _fit_text_line(font_path, line, cap_h, max_w)
+        g = _fit_text_line_exact_h(font_path, line, target_h, max_w)
         if g.is_empty:
             continue
         h_g = g.bounds[3] - g.bounds[1]
@@ -194,15 +210,19 @@ def build_plate_geometries(data: dict):
     DAVID_W = 90.0
     DAVID_H = 90.0
 
-    # Alturas y separaciones exactas de taller (sin compresion vertical forzada)
+    # Alturas y separaciones nominales del PDF Memorial 600x400
     H_QEPD = 23.0
     GAP_QEPD_NOMBRE = 22.0 if es_diagrama_memorial else 20.0
     H_NOMBRE = 28.0 if es_diagrama_memorial else 30.0
     GAP_NOMBRE_FECHA = 10.0 if es_diagrama_memorial else 20.0
     H_FECHA = 20.0
     GAP_FECHA_FRASE = 15.0 if es_diagrama_memorial else 14.0
-    H_DEDICATORIA = 20.0 if es_jardin else 18.0
+    H_DEDICATORIA = 20.0
     GAP_ENTRE_PERSONAS = GAP_FECHA_FRASE if es_diagrama_memorial else 22.0
+
+    # Alturas de ubicacion abajo a la izquierda (en Microsoft Sans Serif)
+    H_UBIC_SECTOR = 25.0 if es_diagrama_memorial else 14.0
+    H_UBIC_NUM = 20.0 if es_diagrama_memorial else 11.0
 
     simbolos = []
     y_cursor = H - MARGEN_SUP_DIAGRAMA
@@ -268,7 +288,7 @@ def build_plate_geometries(data: dict):
 
         if en_linea and fec_str:
             nom_flat = " ".join(nom.splitlines())
-            g_l = _fit_text_line(font_main, f"{nom_flat}  {fec_str}", H_NOMBRE, ancho_util)
+            g_l = _fit_text_line_exact_h(font_main, f"{nom_flat}  {fec_str}", H_NOMBRE, ancho_util)
             if not g_l.is_empty:
                 h_l = g_l.bounds[3] - g_l.bounds[1]
                 y_rel -= h_l
@@ -286,7 +306,7 @@ def build_plate_geometries(data: dict):
                 geoms_personas_temp.append(translate(g_ded, yoff=y_rel - g_ded.bounds[1]))
             if fec_str:
                 y_rel -= GAP_NOMBRE_FECHA
-                g_f = _fit_text_line(font_main, fec_str, H_FECHA, ancho_util)
+                g_f = _fit_text_line_exact_h(font_main, fec_str, H_FECHA, ancho_util)
                 if not g_f.is_empty:
                     h_f = g_f.bounds[3] - g_f.bounds[1]
                     y_rel -= h_f
@@ -339,15 +359,17 @@ def build_plate_geometries(data: dict):
     x_cur = MARGEN_LATERAL
     y_ub = MARGEN_INF_UBIC
     if sector:
-        g_sec = text_to_geom(font_sans, sector, cap_height_mm=14.0).buffer(0)
+        g_sec = text_to_geom(font_sans, sector, cap_height_mm=H_UBIC_SECTOR).buffer(0)
         if not g_sec.is_empty:
+            g_sec = _set_exact_height(g_sec, H_UBIC_SECTOR)
             g_sec = translate(g_sec, xoff=x_cur - g_sec.bounds[0], yoff=y_ub - g_sec.bounds[1])
             ubicacion_geoms.append(g_sec)
             x_cur = g_sec.bounds[2] + 6.0
     num_str = f"{seccion}.{parcela}".strip(".")
     if num_str:
-        g_num = text_to_geom(font_sans, num_str, cap_height_mm=11.0).buffer(0)
+        g_num = text_to_geom(font_sans, num_str, cap_height_mm=H_UBIC_NUM).buffer(0)
         if not g_num.is_empty:
+            g_num = _set_exact_height(g_num, H_UBIC_NUM)
             g_num = translate(g_num, xoff=x_cur - g_num.bounds[0], yoff=y_ub - g_num.bounds[1])
             ubicacion_geoms.append(g_num)
 
