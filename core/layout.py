@@ -1,4 +1,4 @@
-﻿import os
+import os
 import re
 import math
 from shapely.geometry import box, LineString, Polygon
@@ -198,8 +198,9 @@ def _place_block_top_down(font_path: str, text: str, cap_h: float, max_w: float,
             continue
         g = _center_x(g, center_x)
         # Usar alto de referencia sin tilde para que acentos (A, E, I, O, U) no corran el bloque hacia abajo
-        h_l = h_ref if re.search(r"[??????]", line) else (g.bounds[3] - g.bounds[1])
-        g = translate(g, yoff=(cur_top - h_l) - g.bounds[1])
+        con_tilde = re.search("[\u00c1\u00c9\u00cd\u00d3\u00da\u00dc\u00d1]", line) is not None
+        h_l = h_ref if con_tilde else (g.bounds[3] - g.bounds[1])
+        g = translate(g, yoff=(cur_top - h_l) - (0.0 if con_tilde else g.bounds[1]))
         geoms.append(g)
         last_bottom = g.bounds[1]
         cur_top = last_bottom - line_gap
@@ -306,32 +307,41 @@ def build_plate_geometries(data: dict):
 
     font_ded = font_sans if es_diagrama_memorial else font_main
 
-    factor_nombres = _escala_comun_nombres(personas, font_main, H_NOMBRE, ancho_util, en_linea)
+    font_nombres = font_sans if en_linea else font_main
+    factor_nombres = _escala_comun_nombres(personas, font_nombres, H_NOMBRE, ancho_util, en_linea)
+    ded_colocada = False
     for idx, p in enumerate(personas):
         nom = (p.get("nombre") or "").strip().upper()
         fn = _norm_fecha(p.get("fecha_nac", ""))
         ff = _norm_fecha(p.get("fecha_fall", ""))
-        fec_str = f"{fn}      {ff}".strip() if (fn and ff) else (fn or ff)
+        fec_str = (fn + " " * 6 + ff) if (fn and ff) else (fn or ff)
+        top_bloque = cur_top_y
 
-        if en_linea and fec_str:
+        if en_linea:
+            # Todos los renglones "en linea" comparten fuente y factor de escala
             nom_flat = " ".join(nom.splitlines())
-            g_l, bot_l = _place_block_top_down(font_sans, f"{nom_flat}  {fec_str}", H_NOMBRE, ancho_util, eje_x_texto, cur_top_y, 8.0)
+            linea = (nom_flat + " " * 2 + fec_str) if fec_str else nom_flat
+            g_l, bot_l = _place_block_top_down(font_sans, linea, H_NOMBRE, float("inf"), eje_x_texto, top_bloque, 8.0)
             if g_l is not None and not g_l.is_empty:
+                if factor_nombres < 0.999999:
+                    g_l = scale(g_l, xfact=factor_nombres, yfact=factor_nombres, origin=(eje_x_texto, top_bloque))
+                    g_l = _center_x(g_l, eje_x_texto)
+                    bot_l = g_l.bounds[1]
                 textos.append(g_l)
                 cur_top_y = bot_l
         else:
-            g_n, bot_n = _place_block_top_down(font_main, nom, H_NOMBRE, ancho_util, eje_x_texto, cur_top_y, 8.0)
+            # Tamano natural (sin compresion de _fit_line) + unica escala comun anclada al tope del bloque
+            g_n, bot_n = _place_block_top_down(font_main, nom, H_NOMBRE, float("inf"), eje_x_texto, top_bloque, 8.0)
             if g_n is not None and not g_n.is_empty:
                 if factor_nombres < 0.999999:
-                    c_x = (g_n.bounds[0] + g_n.bounds[2]) / 2.0
-                    c_y = (g_n.bounds[1] + g_n.bounds[3]) / 2.0
-                    g_n = scale(g_n, xfact=factor_nombres, yfact=factor_nombres, origin=(c_x, c_y))
+                    g_n = scale(g_n, xfact=factor_nombres, yfact=factor_nombres, origin=(eje_x_texto, top_bloque))
                     g_n = _center_x(g_n, eje_x_texto)
                     bot_n = g_n.bounds[1]
                 g_n = translate(g_n, yoff=3.87)
                 textos.append(g_n)
                 cur_top_y = bot_n + 3.87
             if dedicatoria and dedicatoria_antes_fecha and idx == 0:
+                ded_colocada = True
                 cur_top_y -= GAP_NOMBRE_FECHA
                 g_d, bot_d = _place_block_top_down(font_ded, dedicatoria, H_DEDICATORIA, ancho_util, eje_x_texto, cur_top_y, 8.0)
                 if g_d is not None and not g_d.is_empty:
@@ -348,7 +358,7 @@ def build_plate_geometries(data: dict):
         if idx < len(personas) - 1:
             cur_top_y -= GAP_ENTRE_PERSONAS
 
-    if dedicatoria and not dedicatoria_antes_fecha:
+    if dedicatoria and not ded_colocada:
         cur_top_y -= GAP_FECHA_FRASE
         g_d, bot_d = _place_block_top_down(font_ded, dedicatoria, H_DEDICATORIA, ancho_util, eje_x_texto, cur_top_y, 8.0)
         if g_d is not None and not g_d.is_empty:
